@@ -5,7 +5,7 @@ import zipfile
 
 # Set up folders
 base_path = os.getcwd()  # ~/scratch/anphy_sleep_data
-patient_folder = os.path.join(base_path, "patient_records")
+patient_folder = os.path.join(base_path, "patient_records/raw")
 os.makedirs(patient_folder, exist_ok=True)  # create folder if it doesn't exist
 
 # Connect to OSF
