@@ -321,5 +321,5 @@ if __name__ == "__main__":
     if not os.path.exists("./checkpoints"):
         os.makedirs("./checkpoints")
         torch.save(
-            best_model.state_dict(), "./checkpoints/" + "best_model" + ".pth"
+            best_model.state_dict(), "./checkpoints/" + "best_model_adam" + ".pth"
         )
