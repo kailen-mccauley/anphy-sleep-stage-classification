@@ -11,6 +11,10 @@ import pandas as pd
 import numpy as np
 import timeit
 import time
+from torchmetrics.classification import MulticlassF1Score
+
+NUM_CLASS = 6
+BATCH_SIZE = 32
 
 def get_device():
     if torch.cuda.is_available():
@@ -97,7 +101,7 @@ class MyModel(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 6),
+            nn.Linear(64, NUM_CLASS),
         )
         ### END SOLUTION ###
 
@@ -197,8 +201,9 @@ def validate(epoch, val_loader, model, criterion):
     losses = AverageMeter()
     acc = AverageMeter()
 
-    num_class = 6
-    cm = torch.zeros(num_class, num_class)
+    
+    cm = torch.zeros(NUM_CLASS, NUM_CLASS)
+    f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
     # evaluation loop
     for idx, (data, target) in enumerate(val_loader):
         start = time.time()
@@ -209,6 +214,8 @@ def validate(epoch, val_loader, model, criterion):
 
         # calculate model predictions and validation loss
         ### TODO: BEGIN SOLUTION ###
+
+        model.eval()
         with torch.no_grad():
             out = model(data)
             loss = criterion(out, target)
@@ -225,6 +232,7 @@ def validate(epoch, val_loader, model, criterion):
 
         losses.update(loss, out.shape[0])
         acc.update(batch_acc, out.shape[0])
+        f1_metric.update(preds.to(device), target.to(device))
 
         iter_time.update(time.time() - start)
         if idx % len(val_loader) == 0:
@@ -241,12 +249,17 @@ def validate(epoch, val_loader, model, criterion):
                     top1=acc,
                 )
             )
+    final_macro_f1 = f1_metric.compute()
+
     cm = cm / cm.sum(1)
     per_cls_acc = cm.diag().detach().numpy().tolist()
     for i, acc_i in enumerate(per_cls_acc):
         print("Accuracy of Class {}: {:.4f}".format(i, acc_i))
 
     print("* Prec @1: {top1.avg:.4f}".format(top1=acc))
+    print(f"Macro F1 Score on Validation Set: {final_macro_f1.item()}")
+    model.train()
+
     return acc.avg, cm
 
 
@@ -303,7 +316,7 @@ if __name__ == "__main__":
     generator=torch.Generator().manual_seed(42) # Use a generator for reproducible splits
     )
 
-    BATCH_SIZE = 32
+    
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
     val_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
@@ -341,7 +354,7 @@ if __name__ == "__main__":
     if not os.path.exists("./checkpoints"):
         os.makedirs("./checkpoints")
     torch.save(
-            best_model.state_dict(), "./checkpoints/" + "best_model" + "_with_eval" + ".pth"
+            best_model.state_dict(), "./checkpoints/" + "best_model" + "_with_eval_and_f1" + ".pth"
         )
 
     best_model.eval()
@@ -349,9 +362,10 @@ if __name__ == "__main__":
     losses = AverageMeter()
     acc = AverageMeter()
 
-    num_class = 6
-    cm = torch.zeros(num_class, num_class)
+    
+    cm = torch.zeros(NUM_CLASS, NUM_CLASS)
 
+    f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
     with torch.no_grad():
         for idx, (data, target) in enumerate(test_loader):
             start = time.time()
@@ -360,7 +374,7 @@ if __name__ == "__main__":
             data = torch.transpose(data, 1, 2)
             target = target.to(device)
 
-            out = model(data)
+            out = best_model(data)
             loss = criterion(out, target)
 
 
@@ -373,9 +387,10 @@ if __name__ == "__main__":
 
             losses.update(loss, out.shape[0])
             acc.update(batch_acc, out.shape[0])
+            f1_metric.update(preds.to(device), target.to(device))
 
             iter_time.update(time.time() - start)
-            if idx % len(val_loader) == 0:
+            if idx % len(test_loader) == 0:
                 print(
                     (
                         "Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
@@ -385,9 +400,13 @@ if __name__ == "__main__":
                         top1=acc,
                     )
                 )
+        final_macro_f1 = f1_metric.compute()
         cm = cm / cm.sum(1)
         per_cls_acc = cm.diag().detach().numpy().tolist()
         for i, acc_i in enumerate(per_cls_acc):
             print("Test Accuracy of Class {}: {:.4f}".format(i, acc_i))
+        print(f"Macro F1 Score on Test Set: {final_macro_f1.item()}")
+        print(f"Final Confusion Matrix: {cm}")
 
-        print("*Test Prec @1: {top1.avg:.4f}".format(top1=acc))
+
+        

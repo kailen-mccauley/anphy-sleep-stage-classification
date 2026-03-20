@@ -1,1 +1,7 @@
 # anphy-sleep-stage-classification
+# TODO: 
+Refactor main to be model agnostic  
+Refactor main to use arg params instead of hardcoded ones  
+Add class weighting to cross entropy loss
+Put outputs into some kind of table formatted dataset  
+Add LSTM component
