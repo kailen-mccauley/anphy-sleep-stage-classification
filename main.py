@@ -345,25 +345,49 @@ if __name__ == "__main__":
         )
 
     best_model.eval()
-    test_loss = 0.0
-    correct_predictions = 0
-    total_samples = 0
+    iter_time = AverageMeter()
+    losses = AverageMeter()
+    acc = AverageMeter()
+
+    num_class = 6
+    cm = torch.zeros(num_class, num_class)
 
     with torch.no_grad():
         for idx, (data, target) in enumerate(test_loader):
-            data, target = data.to(device), target.to(device)
+            start = time.time()
+
+            data = data.to(device)
             data = torch.transpose(data, 1, 2)
-            outputs = best_model(data)
-            loss = criterion(outputs, target) 
+            target = target.to(device)
 
-            test_loss += loss.item() * data.size(0)
-            
-            _, predicted = torch.max(outputs.data, 1)
-            total_samples += target.size(0)
-            correct_predictions += (predicted == target).sum().item()
+            out = model(data)
+            loss = criterion(out, target)
 
-    # Calculate final metrics
-    average_test_loss = test_loss / total_samples
-    accuracy = correct_predictions / total_samples
 
-    print(f'Test Loss: {average_test_loss:.4f}, Test Accuracy: {accuracy:.4f}')
+            batch_acc = accuracy(out, target)
+
+            # update confusion matrix
+            _, preds = torch.max(out, 1)
+            for t, p in zip(target.view(-1), preds.view(-1)):
+                cm[t.long(), p.long()] += 1
+
+            losses.update(loss, out.shape[0])
+            acc.update(batch_acc, out.shape[0])
+
+            iter_time.update(time.time() - start)
+            if idx % len(val_loader) == 0:
+                print(
+                    (
+                        "Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                    ).format(
+                        iter_time=iter_time,
+                        loss=losses,
+                        top1=acc,
+                    )
+                )
+        cm = cm / cm.sum(1)
+        per_cls_acc = cm.diag().detach().numpy().tolist()
+        for i, acc_i in enumerate(per_cls_acc):
+            print("Test Accuracy of Class {}: {:.4f}".format(i, acc_i))
+
+        print("*Test Prec @1: {top1.avg:.4f}".format(top1=acc))
