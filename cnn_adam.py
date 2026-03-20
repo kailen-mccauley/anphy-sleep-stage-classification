@@ -282,13 +282,21 @@ if __name__ == "__main__":
     model = MyModel()
     model = model.to(device)
     
-    train_size = int(len(combined_dataset) * 0.8)
-    test_size = len(combined_dataset) - train_size
-    train_dataset, test_dataset = random_split(combined_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
+    n = len(combined_dataset)
+    n_train = int(n * 0.7)
+    n_val = int(n * 0.15)
+    n_test = n - n_train - n_val
+    train_dataset, val_dataset, test_dataset = random_split(
+    combined_dataset, 
+    [n_train, n_val, n_test],
+    generator=torch.Generator().manual_seed(42) # Use a generator for reproducible splits
+    )
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    
+    BATCH_SIZE = 32
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    val_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -306,7 +314,7 @@ if __name__ == "__main__":
         train(epoch, train_loader, model, optimizer, criterion, scheduler)
 
         # validation loop
-        acc, cm = validate(epoch, test_loader, model, criterion)
+        acc, cm = validate(epoch, val_loader, model, criterion)
 
         if acc > best:
             best = acc
@@ -320,6 +328,30 @@ if __name__ == "__main__":
     
     if not os.path.exists("./checkpoints"):
         os.makedirs("./checkpoints")
-        torch.save(
-            best_model.state_dict(), "./checkpoints/" + "best_model_adam" + ".pth"
+    torch.save(
+            best_model.state_dict(), "./checkpoints/" + "best_model_adam" + "_with_eval" + ".pth"
         )
+
+    best_model.eval()
+    test_loss = 0.0
+    correct_predictions = 0
+    total_samples = 0
+
+    with torch.no_grad():
+        for idx, (data, target) in enumerate(test_loader):
+            data, target = data.to(device), target.to(device)
+            data = torch.transpose(data, 1, 2)
+            outputs = best_model(data)
+            loss = criterion(outputs, target) 
+
+            test_loss += loss.item() * data.size(0)
+            
+            _, predicted = torch.max(outputs.data, 1)
+            total_samples += target.size(0)
+            correct_predictions += (predicted == target).sum().item()
+
+    # Calculate final metrics
+    average_test_loss = test_loss / total_samples
+    accuracy = correct_predictions / total_samples
+
+    print(f'Test Loss: {average_test_loss:.4f}, Test Accuracy: {accuracy:.4f}')
