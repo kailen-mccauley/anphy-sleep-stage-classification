@@ -11,10 +11,13 @@ import pandas as pd
 import numpy as np
 import timeit
 import time
+import argparse
+import yaml
 from torchmetrics.classification import MulticlassF1Score
+from models import MyModel
 
 NUM_CLASS = 6
-BATCH_SIZE = 32
+
 
 def get_device():
     if torch.cuda.is_available():
@@ -23,9 +26,17 @@ def get_device():
         return "mps"
     else:
         return "cpu"
+    
+device = get_device()
+print(f"Device: {device}")
+# For the purposes of keeping PACE on track
+assert device == "cuda"
+
+parser = argparse.ArgumentParser(description="CS 7643 Sleep Stage Classification Project")
+parser.add_argument("--config", default="./configs/config_mymodel.yaml")
 
 class SleepDataset(Dataset):
-    def __init__(self, file_path, length, window_size=5):
+    def __init__(self, file_path, length):
         
         self.file_path = file_path
         self.length = length
@@ -60,58 +71,6 @@ def custom_collate(batch):
     labels = torch.tensor(labels)
     return padded_data, labels
 
-class MyModel(nn.Module):
-    # You can use pre-existing models but change layers to recieve full credit.
-    def __init__(self):
-        super(MyModel, self).__init__()
-        ### TODO: BEGIN SOLUTION ###
-        self.model_sequential = nn.Sequential(
-            nn.Conv1d(in_channels=14, out_channels= 32, kernel_size=3),
-            nn.BatchNorm1d(num_features=32),
-            nn.ReLU(),
-            nn.MaxPool1d(2, 2),
-            nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-
-            nn.Conv1d(in_channels=64, out_channels = 128, kernel_size=3),
-            nn.BatchNorm1d(num_features=128),
-            nn.ReLU(),
-            nn.Conv1d(in_channels=128, out_channels = 256, kernel_size=3),
-            nn.BatchNorm1d(num_features=256),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-            
-            nn.Conv1d(in_channels=256, out_channels = 64, kernel_size=7),
-            nn.BatchNorm1d(num_features=64),
-            nn.ReLU(),
-            nn.Conv1d(in_channels=64, out_channels = 32, kernel_size=3),
-            nn.BatchNorm1d(num_features=32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-
-            nn.Flatten(),
-            
-            nn.Linear(5824, 1028),
-            nn.ReLU(),
-            nn.Linear(1028, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, NUM_CLASS),
-        )
-        ### END SOLUTION ###
-
-    def forward(self, x):
-        outs = None
-        ### TODO: BEGIN SOLUTION ###
-        outs = self.model_sequential(x)
-        ### END SOLUTION ###
-        return outs
-    
 
 
 class AverageMeter(object):
@@ -263,25 +222,38 @@ def validate(epoch, val_loader, model, criterion):
     return acc.avg, cm
 
 
-def adjust_learning_rate(optimizer, learning_rate, epoch, warmup, steps):
+def adjust_learning_rate(optimizer, epoch, args):
     epoch += 1
-    if epoch <= warmup:
-        lr = learning_rate * epoch / warmup
-    elif epoch > steps[1]:
-        lr = learning_rate * 0.01
-    elif epoch > steps[0]:
-        lr = learning_rate * 0.1
+    if epoch <= args.warmup:
+        lr = args.learning_rate * epoch / args.warmup
+    elif epoch > args.steps[1]:
+        lr = args.learning_rate * 0.01
+    elif epoch > args.steps[0]:
+        lr = args.learning_rate * 0.1
     else:
-        lr = learning_rate
+        lr = args.learning_rate
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
-    
 
-if __name__ == "__main__":
-    device = get_device()
-    print(f"Device: {device}")
-    assert device == "cuda"
+def main():
+    # lr = 0.001
+    # momentum = 0.9
+    # weight_decay = 0.001
+    # epochs = 1000
+    # warmup = 0
+    # steps = [6, 8]
+
+    global args
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        config = yaml.load(f, Loader=yaml.Loader)
+
+    for key in config:
+        for k, v in config[key].items():
+            setattr(args, k, v)
+    
 
 
     data_dir = 'anphy_sleep_data/patient_records/clean'       
@@ -294,14 +266,6 @@ if __name__ == "__main__":
     datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1]) for i in range(len(metadata))]
     combined_dataset = ConcatDataset(datasets)
 
-    
-
-    lr = 0.001
-    momentum = 0.9
-    weight_decay = 0.001
-    epochs = 1000
-    warmup = 0
-    steps = [6, 8]
     
     model = MyModel()
     model = model.to(device)
@@ -317,23 +281,23 @@ if __name__ == "__main__":
     )
 
     
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    val_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
     
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
         model.parameters(),
-        lr,
-        momentum,
-        weight_decay
+        args.learning_rate,
+        momentum = args.momentum,
+        weight_decay = args.reg,
     )
         
     best = 0.0
     best_cm = None
     best_model = model
-    for epoch in range(epochs):
-        adjust_learning_rate(optimizer, lr, epoch, warmup, steps)
+    for epoch in range(args.epochs):
+        adjust_learning_rate(optimizer, epoch, args)
 
         # train loop
         train(epoch, train_loader, model, optimizer, criterion)
@@ -351,11 +315,12 @@ if __name__ == "__main__":
     for i, acc_i in enumerate(per_cls_acc):
         print("Accuracy of Class {}: {:.4f}".format(i, acc_i))
     
-    if not os.path.exists("./checkpoints"):
-        os.makedirs("./checkpoints")
-    torch.save(
-            best_model.state_dict(), "./checkpoints/" + "best_model" + "_with_eval_and_f1" + ".pth"
-        )
+    if args.save_best:
+        if not os.path.exists("./checkpoints"):
+            os.makedirs("./checkpoints")
+        torch.save(
+                best_model.state_dict(), "./checkpoints/" + "best_model" + "_with_eval_and_f1" + ".pth"
+            )
 
     best_model.eval()
     iter_time = AverageMeter()
@@ -408,5 +373,9 @@ if __name__ == "__main__":
         print(f"Macro F1 Score on Test Set: {final_macro_f1.item()}")
         print(f"Final Confusion Matrix: {cm}")
 
+
+if __name__ == "__main__":
+    main()
+    
 
         
