@@ -14,7 +14,8 @@ import time
 import argparse
 import yaml
 from torchmetrics.classification import MulticlassF1Score
-from models import MyModel
+from sklearn.utils import class_weight
+from models import MyModel, MyLSTMModel
 
 NUM_CLASS = 6
 
@@ -35,12 +36,32 @@ assert device == "cuda"
 parser = argparse.ArgumentParser(description="CS 7643 Sleep Stage Classification Project")
 parser.add_argument("--config", default="./configs/config_mymodel.yaml")
 
+
+def concat_samples(features, context_size=2):
+    # print(f"Features shape: {features.shape}")
+    N, D = features.shape
+    padded = torch.nn.functional.pad(features, (0, 0, context_size, context_size), mode='constant', value=0)
+
+    windows = []
+    for i in range(N):
+        # Slice the padded tensor to get the segment + context
+        window = padded[i : i + (2 * context_size + 1), :]
+        windows.append(window)
+
+    stacked = torch.stack(windows, dim=0) # (Segments, Window_Size, Features)
+    new_features = stacked.view(N, -1)
+    # print(f"Final feature shape: {new_features.shape}")
+    
+    return new_features
+
+
 class SleepDataset(Dataset):
-    def __init__(self, file_path, length):
+    def __init__(self, file_path, length, window_size):
         
         self.file_path = file_path
         self.length = length
         self.data = torch.load(self.file_path, weights_only=False, mmap=True)
+        self.window_size = window_size
 #         self.features = torch.from_numpy(np.transpose(data["X"], axes=(0, 2, 1))).float()
 #         self.labels = torch.from_numpy(data["y"]).long()
 
@@ -50,11 +71,12 @@ class SleepDataset(Dataset):
     def __getitem__(self, idx):
         
         # return self.features[idx], self.labels[idx]
-        feature = torch.from_numpy(self.data["X"][idx]).float()
-        label = torch.tensor(self.data["y"][idx]).long()
+        feature = torch.from_numpy(self.data["X"][idx]).to(torch.float32)
+        label = torch.tensor(self.data["y"][idx]).to(torch.int)
         
         # Apply transpose here if needed based on original shape
         feature = feature.transpose(1, 0)
+        # feature = concat_samples(features, self.window_size)
         return feature, label
     
 
@@ -109,6 +131,7 @@ def train(epoch, data_loader, model, optimizer, criterion):
     iter_time = AverageMeter()
     losses = AverageMeter()
     acc = AverageMeter()
+    print("Train loop initiated!")
 
     for idx, (data, target) in enumerate(data_loader):
         start = time.time()
@@ -117,6 +140,9 @@ def train(epoch, data_loader, model, optimizer, criterion):
         data = torch.transpose(data, 1, 2)
         # print(f"data shape: {data.shape}")
         target = target.to(device)
+        print(f"Target shape: {target.shape}")
+
+        print("Calculating model predictions")
 
         # calculate model predictions, training loss, and update model parameters
         ### TODO: BEGIN SOLUTION ###
@@ -127,6 +153,7 @@ def train(epoch, data_loader, model, optimizer, criterion):
         optimizer.step()
         
         ### END SOLUTION ###
+        print("Model predictions and gradients calculated")
 
         batch_acc = accuracy(out, target)
 
@@ -150,6 +177,7 @@ def train(epoch, data_loader, model, optimizer, criterion):
                     top1=acc,
                 )
             )
+    print("Train loop ended!")
 
 
 def validate(epoch, val_loader, model, criterion):
@@ -164,6 +192,7 @@ def validate(epoch, val_loader, model, criterion):
     cm = torch.zeros(NUM_CLASS, NUM_CLASS)
     f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
     # evaluation loop
+    print("Val loop initiated!")
     for idx, (data, target) in enumerate(val_loader):
         start = time.time()
 
@@ -173,6 +202,7 @@ def validate(epoch, val_loader, model, criterion):
 
         # calculate model predictions and validation loss
         ### TODO: BEGIN SOLUTION ###
+        print("Calculating val predictions")
 
         model.eval()
         with torch.no_grad():
@@ -181,6 +211,7 @@ def validate(epoch, val_loader, model, criterion):
 
             
         ### END SOLUTION ###
+        print("Val predictions finished")
 
         batch_acc = accuracy(out, target)
 
@@ -208,6 +239,7 @@ def validate(epoch, val_loader, model, criterion):
                     top1=acc,
                 )
             )
+    print("Val loop ended!")
     final_macro_f1 = f1_metric.compute()
 
     cm = cm / cm.sum(1)
@@ -236,6 +268,16 @@ def adjust_learning_rate(optimizer, epoch, args):
         param_group["lr"] = lr
 
 
+def get_balanced_weights(labels, num_classes):
+    counts = torch.bincount(labels, minlength=num_classes).float()
+    
+    weights = labels.size(0) / (num_classes * counts)
+    
+    weights[torch.isinf(weights)] = 0.0
+    
+    return weights
+
+
 def main():
     # lr = 0.001
     # momentum = 0.9
@@ -257,14 +299,14 @@ def main():
 
 
     data_dir = 'anphy_sleep_data/patient_records/clean'       
-    file_paths = glob.glob(os.path.join(data_dir, '*.pt'))
-
+    
     metadata = pd.read_csv("recording_epoch_nums.csv", header=None)
     metadata.sort_values(by=0, inplace=True)
     metadata = metadata.reset_index(drop=True)
 
-    datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1]) for i in range(len(metadata))]
+    datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1], 2) for i in range(len(metadata))]
     combined_dataset = ConcatDataset(datasets)
+    
 
     
     model = MyModel()
@@ -283,8 +325,16 @@ def main():
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
     
+    print("No memory issues with data loaders")
+    # print("Before getting y train")
+    # y_train = torch.cat([label for _, label in train_loader])
+    # assert(y_train.size(0) == n_train)
+    # print("Successfully retrieved y train")
+    # class_weights = get_balanced_weights(y_train, 6).to(device)
+    # print("Got class weights successfully")
+
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -296,7 +346,9 @@ def main():
     best = 0.0
     best_cm = None
     best_model = model
+    peak_val_accuracy_epoch = 0
     for epoch in range(args.epochs):
+        print(f"Epoch {epoch}")
         adjust_learning_rate(optimizer, epoch, args)
 
         # train loop
@@ -307,10 +359,12 @@ def main():
 
         if acc > best:
             best = acc
+            peak_val_accuracy_epoch = epoch
             best_cm = cm
             best_model = copy.deepcopy(model)
 
     print("Best Prec @1 Acccuracy: {:.4f}".format(best))
+    print(f"Epoch where best accuracy reached: {peak_val_accuracy_epoch}")
     per_cls_acc = best_cm.diag().detach().numpy().tolist()
     for i, acc_i in enumerate(per_cls_acc):
         print("Accuracy of Class {}: {:.4f}".format(i, acc_i))
@@ -319,7 +373,7 @@ def main():
         if not os.path.exists("./checkpoints"):
             os.makedirs("./checkpoints")
         torch.save(
-                best_model.state_dict(), "./checkpoints/" + "best_model" + "_with_eval_and_f1" + ".pth"
+                best_model.state_dict(), "./checkpoints/" + "lstm_model" + ".pth"
             )
 
     best_model.eval()
@@ -331,6 +385,9 @@ def main():
     cm = torch.zeros(NUM_CLASS, NUM_CLASS)
 
     f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
+
+    all_preds = []
+    all_targets = []
     with torch.no_grad():
         for idx, (data, target) in enumerate(test_loader):
             start = time.time()
@@ -340,6 +397,8 @@ def main():
             target = target.to(device)
 
             out = best_model(data)
+            all_preds.append(out.detach().cpu())
+            all_targets.append(target.detach().cpu())
             loss = criterion(out, target)
 
 
@@ -372,6 +431,13 @@ def main():
             print("Test Accuracy of Class {}: {:.4f}".format(i, acc_i))
         print(f"Macro F1 Score on Test Set: {final_macro_f1.item()}")
         print(f"Final Confusion Matrix: {cm}")
+    final_preds = torch.cat(all_preds, dim=0)
+    final_targets = torch.cat(all_targets, dim=0)
+    df = pd.DataFrame({
+    'Predicted': final_preds.numpy(),
+    'Actual': final_targets.numpy()
+        })
+    df.to_parquet('results.parquet', index=False)
 
 
 if __name__ == "__main__":

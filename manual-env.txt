@@ -1,0 +1,11 @@
+conda install ipykernel
+pip install the rest
+numpy
+pandas
+PyYAML
+scikit-learn
+mne
+
+go to website for pytorch install
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+torchmetrics
