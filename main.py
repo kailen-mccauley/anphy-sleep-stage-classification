@@ -16,6 +16,7 @@ import yaml
 from torchmetrics.classification import MulticlassF1Score
 from sklearn.utils import class_weight
 from models import MyModel, MyLSTMModel
+import gc
 
 NUM_CLASS = 6
 
@@ -72,12 +73,58 @@ class SleepDataset(Dataset):
         
         # return self.features[idx], self.labels[idx]
         feature = torch.from_numpy(self.data["X"][idx]).to(torch.float32)
-        label = torch.tensor(self.data["y"][idx]).to(torch.int)
+        label = torch.tensor(self.data["y"][idx]).to(torch.long)
         
         # Apply transpose here if needed based on original shape
         feature = feature.transpose(1, 0)
         # feature = concat_samples(features, self.window_size)
         return feature, label
+    
+# class GlobalSleepDataset(Dataset):
+#     def __init__(self, metadata, data_dir, window_size=2, shuffle_files=True):
+#         self.data_dir = data_dir
+#         self.window_size = window_size
+
+#         self.files = []
+#         for i in range(len(metadata)):
+#             file_name = metadata.loc[i, 0]
+#             length = metadata.loc[i, 1]
+#             file_path = os.path.join(data_dir, file_name)
+
+#             self.files.append((file_path, length))
+        
+#         if shuffle_files:
+#             random.shuffle(self.files)
+        
+#         self.index = []
+
+#         for file_path, length in self.files:
+#             for j in range(length):
+#                 self.index.append((file_path, j))
+
+#         # Cache
+#         self._cache_file = None
+#         self._cache_data = None
+
+#     def __len__(self):
+#         return len(self.index)
+
+#     def __getitem__(self, idx):
+#         file_path, local_idx = self.index[idx]
+
+#         # Only reload if file changes
+#         if self._cache_file != file_path:
+#             self._cache_data = torch.load(file_path, weights_only=False, mmap=True)
+#             self._cache_file = file_path
+
+#         data = self._cache_data
+
+#         feature = torch.from_numpy(data["X"][local_idx]).float()
+#         label = torch.tensor(data["y"][local_idx]).long()
+
+#         feature = feature.transpose(1, 0)
+
+#         return feature, label
     
 
 def custom_collate(batch):
@@ -91,6 +138,9 @@ def custom_collate(batch):
 #     print(f"Labels list: {labels}" )
     padded_data = pad_sequence(data, batch_first=True)
     labels = torch.tensor(labels)
+
+    # max_len = max(x.shape[0] for x in batch)
+    # print("Max length in batch:", max_len)
     return padded_data, labels
 
 
@@ -127,45 +177,70 @@ def accuracy(output, target):
     return acc
 
 
-def train(epoch, data_loader, model, optimizer, criterion):
+def train(epoch, data_loader, model, optimizer, scheduler, criterion):
     iter_time = AverageMeter()
     losses = AverageMeter()
     acc = AverageMeter()
-    print("Train loop initiated!")
+    # print("Train loop initiated!")
 
+    model.train()
+
+    total_correct = 0
+
+    end_time = time.time()
+    data_time = AverageMeter()
     for idx, (data, target) in enumerate(data_loader):
+        # print("Data time: ", time.time() - start_data_time)
+        data_time.update(time.time() - end_time)
+
         start = time.time()
 
         data = data.to(device)
         data = torch.transpose(data, 1, 2)
         # print(f"data shape: {data.shape}")
         target = target.to(device)
-        print(f"Target shape: {target.shape}")
+        # print(f"Target shape: {target.shape}")
 
-        print("Calculating model predictions")
+        # print("Calculating model predictions")
+
+        cm = torch.zeros(NUM_CLASS, NUM_CLASS)
+        f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
 
         # calculate model predictions, training loss, and update model parameters
         ### TODO: BEGIN SOLUTION ###
+        # start_compute = time.time()
         optimizer.zero_grad()
         out = model(data)
         loss = criterion(out, target)
         loss.backward()
         optimizer.step()
+        # print("Compute time: ", time.time() - start_compute)
+
+        if scheduler is not None:
+            scheduler.step(epoch + idx / len(data_loader))
         
         ### END SOLUTION ###
-        print("Model predictions and gradients calculated")
+        # print("Model predictions and gradients calculated")
 
         batch_acc = accuracy(out, target)
 
-        losses.update(loss, out.shape[0])
+        _, preds = torch.max(out, 1)
+        total_correct += preds.eq(target).sum() * 1.0
+        for t, p in zip(target.view(-1), preds.view(-1)):
+            cm[t.long(), p.long()] += 1
+
+
+        losses.update(loss.item(), out.shape[0])
         acc.update(batch_acc, out.shape[0])
+        f1_metric.update(preds.to(device), target.to(device))
 
         iter_time.update(time.time() - start)
         if idx % len(data_loader) == 0:
             print(
                 (
                     "Epoch: [{0}][{1}/{2}]\t"
-                    "Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                    "Iter Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                    "Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t"
                     "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
                     "Prec @1 {top1.val:.4f} ({top1.avg:.4f})\t"
                 ).format(
@@ -173,11 +248,25 @@ def train(epoch, data_loader, model, optimizer, criterion):
                     idx,
                     len(data_loader),
                     iter_time=iter_time,
+                    data_time=data_time,
                     loss=losses,
                     top1=acc,
                 )
             )
-    print("Train loop ended!")
+
+        end_time = time.time()
+
+    final_macro_f1 = f1_metric.compute()
+
+    cm = cm / cm.sum(1)
+    per_cls_acc = cm.diag().detach().numpy().tolist()
+    overall_accuracy = total_correct / len(data_loader.dataset)
+    for i, acc_i in enumerate(per_cls_acc):
+        print("Training Accuracy of Class {}: {:.4f}".format(i, acc_i))
+    print(f"Total Overall Training Accuracy: {overall_accuracy}")
+    print("* Prec @1: {top1.avg:.4f}".format(top1=acc))
+    print(f"Macro F1 Score on Training Set: {final_macro_f1.item()}")
+    # print("Train loop ended!")
 
 
 def validate(epoch, val_loader, model, criterion):
@@ -188,12 +277,22 @@ def validate(epoch, val_loader, model, criterion):
     losses = AverageMeter()
     acc = AverageMeter()
 
+    data_time = AverageMeter()
+
+    model.eval()
+
     
     cm = torch.zeros(NUM_CLASS, NUM_CLASS)
     f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
     # evaluation loop
-    print("Val loop initiated!")
+    # print("Val loop initiated!")
+
+    total_correct = 0
+    end_time = time.time()
+
     for idx, (data, target) in enumerate(val_loader):
+        data_time.update(time.time() - end_time)
+
         start = time.time()
 
         data = data.to(device)
@@ -202,56 +301,63 @@ def validate(epoch, val_loader, model, criterion):
 
         # calculate model predictions and validation loss
         ### TODO: BEGIN SOLUTION ###
-        print("Calculating val predictions")
+        # print("Calculating val predictions")
 
-        model.eval()
+        
         with torch.no_grad():
             out = model(data)
             loss = criterion(out, target)
 
             
         ### END SOLUTION ###
-        print("Val predictions finished")
+        # print("Val predictions finished")
 
         batch_acc = accuracy(out, target)
 
         # update confusion matrix
         _, preds = torch.max(out, 1)
+        total_correct += preds.eq(target).sum() * 1.0
         for t, p in zip(target.view(-1), preds.view(-1)):
             cm[t.long(), p.long()] += 1
 
-        losses.update(loss, out.shape[0])
+        losses.update(loss.item(), out.shape[0])
         acc.update(batch_acc, out.shape[0])
         f1_metric.update(preds.to(device), target.to(device))
 
         iter_time.update(time.time() - start)
         if idx % len(val_loader) == 0:
+        # if idx % 1 == 0:
             print(
                 (
                     "Epoch: [{0}][{1}/{2}]\t"
-                    "Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                    "Iter Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                    "Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t"
                 ).format(
                     epoch,
                     idx,
                     len(val_loader),
                     iter_time=iter_time,
+                    data_time = data_time,
                     loss=losses,
                     top1=acc,
                 )
             )
-    print("Val loop ended!")
+
+        end_time = time.time()
+    # print("Val loop ended!")
     final_macro_f1 = f1_metric.compute()
 
     cm = cm / cm.sum(1)
     per_cls_acc = cm.diag().detach().numpy().tolist()
+    overall_accuracy = total_correct / len(val_loader.dataset)
     for i, acc_i in enumerate(per_cls_acc):
-        print("Accuracy of Class {}: {:.4f}".format(i, acc_i))
-
+        print("Validation Accuracy of Class {}: {:.4f}".format(i, acc_i))
+    print(f"Total Overall Validation Accuracy: {overall_accuracy}")
     print("* Prec @1: {top1.avg:.4f}".format(top1=acc))
     print(f"Macro F1 Score on Validation Set: {final_macro_f1.item()}")
-    model.train()
+    
 
-    return acc.avg, cm
+    return acc.avg, cm, losses
 
 
 def adjust_learning_rate(optimizer, epoch, args):
@@ -267,6 +373,25 @@ def adjust_learning_rate(optimizer, epoch, args):
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
+
 
 def get_balanced_weights(labels, num_classes):
     counts = torch.bincount(labels, minlength=num_classes).float()
@@ -279,12 +404,6 @@ def get_balanced_weights(labels, num_classes):
 
 
 def main():
-    # lr = 0.001
-    # momentum = 0.9
-    # weight_decay = 0.001
-    # epochs = 1000
-    # warmup = 0
-    # steps = [6, 8]
 
     global args
     args = parser.parse_args()
@@ -295,6 +414,9 @@ def main():
     for key in config:
         for k, v in config[key].items():
             setattr(args, k, v)
+            print(f"{k}: {v}")
+    
+
     
 
 
@@ -306,10 +428,24 @@ def main():
 
     datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1], 2) for i in range(len(metadata))]
     combined_dataset = ConcatDataset(datasets)
+    # combined_dataset = GlobalSleepDataset(metadata, data_dir)
+    print("Dataset created")
     
+    model_name = f"{args.model}_{args.optimizer}_optim"
+    if args.scheduler:
+        model_name += "_with_scheduler"
+    else:
+        model_name +="_noscheduler"
+    if args.class_weighting:
+        model_name += "_with_class_weights"
+    model_name += f"_seed_{args.seed}"
 
-    
-    model = MyModel()
+    if args.model == "CNN":
+        model = MyModel()
+    elif args.model == "CNN-LSTM":
+        model = MyLSTMModel()
+    else:
+        raise ValueError("No model specified")
     model = model.to(device)
     
     n = len(combined_dataset)
@@ -319,29 +455,61 @@ def main():
     train_dataset, val_dataset, test_dataset = random_split(
     combined_dataset, 
     [n_train, n_val, n_test],
-    generator=torch.Generator().manual_seed(42) # Use a generator for reproducible splits
+    generator=torch.Generator().manual_seed(args.seed) # Use a generator for reproducible splits
     )
+    print("Dataset split complete")
 
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, persistent_workers=True, pin_memory=True, collate_fn=custom_collate)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, persistent_workers=True, pin_memory=False, prefetch_factor=1, collate_fn=custom_collate)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=1, persistent_workers=True, pin_memory=False, prefetch_factor=1, collate_fn=custom_collate)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=1, persistent_workers=True, pin_memory=False, prefetch_factor=1, collate_fn=custom_collate)
     
-    print("No memory issues with data loaders")
-    # print("Before getting y train")
-    # y_train = torch.cat([label for _, label in train_loader])
-    # assert(y_train.size(0) == n_train)
-    # print("Successfully retrieved y train")
-    # class_weights = get_balanced_weights(y_train, 6).to(device)
-    # print("Got class weights successfully")
+    print("Data loaders initiated")
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(
-        model.parameters(),
-        args.learning_rate,
-        momentum = args.momentum,
-        weight_decay = args.reg,
-    )
+    criterion = None
+    if args.class_weighting:
+
+        # print("Before getting y train")
+        y_train = torch.cat([label for _, label in train_loader])
+        assert(y_train.size(0) == n_train)
+        # print("Successfully retrieved y train")
+        class_weights = get_balanced_weights(y_train, NUM_CLASS).to(device)
+        print("Got class weights successfully")
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        criterion = nn.CrossEntropyLoss()
+
+    optimizer = None
+    if args.optimizer == "base":
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            args.learning_rate,
+            momentum = args.momentum,
+            weight_decay = args.reg,
+        )
+    elif args.optimizer == "ADAM":
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr = args.learning_rate,
+            weight_decay = args.reg
+        )
+    else:
+        raise ValueError("No valid optimizer specified")
+
+    scheduler = None
+    if args.scheduler:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=10, 
+            T_mult=2, 
+            eta_min=1e-6
+        )
+
+
+    early_stopper = None
+    if args.early_stopping:
+        early_stopper = EarlyStopping(args.patience, args.min_delta)
+   
         
     best = 0.0
     best_cm = None
@@ -349,19 +517,26 @@ def main():
     peak_val_accuracy_epoch = 0
     for epoch in range(args.epochs):
         print(f"Epoch {epoch}")
-        adjust_learning_rate(optimizer, epoch, args)
+        if args.optimizer == "base":
+            adjust_learning_rate(optimizer, epoch, args)
 
         # train loop
-        train(epoch, train_loader, model, optimizer, criterion)
+        train(epoch, train_loader, model, optimizer, scheduler, criterion)
 
         # validation loop
-        acc, cm = validate(epoch, val_loader, model, criterion)
+        acc, cm, epoch_losses = validate(epoch, val_loader, model, criterion)
 
         if acc > best:
             best = acc
             peak_val_accuracy_epoch = epoch
             best_cm = cm
             best_model = copy.deepcopy(model)
+        
+        if early_stopper is not None:
+            early_stopper(epoch_losses.avg)
+            if early_stopper.early_stop:
+                print(f"Early stopping triggered at epoch {epoch}")
+                break
 
     print("Best Prec @1 Acccuracy: {:.4f}".format(best))
     print(f"Epoch where best accuracy reached: {peak_val_accuracy_epoch}")
@@ -373,7 +548,7 @@ def main():
         if not os.path.exists("./checkpoints"):
             os.makedirs("./checkpoints")
         torch.save(
-                best_model.state_dict(), "./checkpoints/" + "lstm_model" + ".pth"
+                best_model.state_dict(), "./checkpoints/" + model_name + "_best_model" + ".pth"
             )
 
     best_model.eval()
@@ -381,15 +556,29 @@ def main():
     losses = AverageMeter()
     acc = AverageMeter()
 
+    data_time = AverageMeter()
+    total_correct = 0
+
     
     cm = torch.zeros(NUM_CLASS, NUM_CLASS)
 
     f1_metric = MulticlassF1Score(num_classes=NUM_CLASS, average="macro").to(device)
 
+    # output_dir = "results_files"
+    # os.makedirs(output_dir, exist_ok=True)
+
+    output_dir = Path(f"results_files/{model_name}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    end_time = time.time()
+
     all_preds = []
     all_targets = []
+
     with torch.no_grad():
         for idx, (data, target) in enumerate(test_loader):
+            data_time.update(time.time() - end_time)
+
             start = time.time()
 
             data = data.to(device)
@@ -397,8 +586,7 @@ def main():
             target = target.to(device)
 
             out = best_model(data)
-            all_preds.append(out.detach().cpu())
-            all_targets.append(target.detach().cpu())
+            
             loss = criterion(out, target)
 
 
@@ -406,42 +594,63 @@ def main():
 
             # update confusion matrix
             _, preds = torch.max(out, 1)
+            total_correct += preds.eq(target).sum() * 1.0
             for t, p in zip(target.view(-1), preds.view(-1)):
                 cm[t.long(), p.long()] += 1
 
-            losses.update(loss, out.shape[0])
+            losses.update(loss.item(), out.shape[0])
             acc.update(batch_acc, out.shape[0])
             f1_metric.update(preds.to(device), target.to(device))
+
+            all_preds.append(preds.cpu())
+            all_targets.append(target.cpu())
+
+            # batch_df = pd.DataFrame({
+            #     "Predicted": preds.cpu().numpy(),
+            #     "Actual": target.cpu().numpy()
+            # })
+
+            # batch_df.to_parquet(f"{output_dir}/{model_name}_batch_{idx}.parquet", index=False)
 
             iter_time.update(time.time() - start)
             if idx % len(test_loader) == 0:
                 print(
                     (
-                        "Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                        "Iter Time {iter_time.val:.3f} ({iter_time.avg:.3f})\t"
+                        "Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t"
                     ).format(
                         iter_time=iter_time,
+                        data_time = data_time,
                         loss=losses,
                         top1=acc,
                     )
                 )
+            end_time = time.time()
         final_macro_f1 = f1_metric.compute()
         cm = cm / cm.sum(1)
         per_cls_acc = cm.diag().detach().numpy().tolist()
+        overall_accuracy = total_correct / len(test_loader.dataset)
         for i, acc_i in enumerate(per_cls_acc):
             print("Test Accuracy of Class {}: {:.4f}".format(i, acc_i))
         print(f"Macro F1 Score on Test Set: {final_macro_f1.item()}")
+        print(f"Total Overall Test Accuracy: {overall_accuracy}")
         print(f"Final Confusion Matrix: {cm}")
-    final_preds = torch.cat(all_preds, dim=0)
-    final_targets = torch.cat(all_targets, dim=0)
-    df = pd.DataFrame({
-    'Predicted': final_preds.numpy(),
-    'Actual': final_targets.numpy()
-        })
-    df.to_parquet('results.parquet', index=False)
 
+        if args.save_preds:
+            final_df = pd.DataFrame({
+                    "Predicted": torch.cat(all_preds).numpy(),
+                    "Actual": torch.cat(all_targets).numpy()
+                })
+
+            final_df.to_parquet(f"{output_dir}/results.parquet", index=False)
+
+
+    
+   
 
 if __name__ == "__main__":
     main()
+    os._exit(0)
     
 
         

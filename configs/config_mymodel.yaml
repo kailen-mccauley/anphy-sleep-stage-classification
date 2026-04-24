@@ -1,15 +1,22 @@
 Train:
-  batch_size: 16
+  batch_size: 32
   learning_rate: 0.002
   reg: 0.001
-  epochs: 2
+  epochs: 1000
   steps: [6, 8]
   warmup: 0
   momentum: 0.9
+  seed: 42
+  patience: 5
+  min_delta: 0.0001
 
 data:
-  save_best: False
+  save_best: True
+  save_preds: True
 
 network:
-  model: MyModel
-  optimizer: base
+  model: CNN # CNN or CNN-LSTM
+  optimizer: ADAM # base or ADAM
+  scheduler: True
+  class_weighting: False
+  early_stopping: True

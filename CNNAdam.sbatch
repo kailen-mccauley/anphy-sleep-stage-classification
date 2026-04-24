@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -JCNN
+#SBATCH -JCNNAdam
 #SBATCH -N1 --ntasks-per-node=1
 #SBATCH --gres=gpu:1 
 #SBATCH --constraint="L40S|HX00|A40|A100-40GB|A100-80GB|gpu-rtxpro-blackwell|V100-16GB|V100-32GB|RTX6000"
 #SBATCH --mem-per-cpu=16G
 #SBATCH --cpus-per-task=8
 #SBATCH -t120
-#SBATCH -oModelReportCNN-%j.out
+#SBATCH -oModelReportCNNwithADAMW-%j.out
 
 #SBATCH --mail-type=BEGIN,END,FAIL       # Mail preferences
 #SBATCH --mail-user=eyang82@gatech.edu # E-mail address for notifications

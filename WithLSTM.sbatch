@@ -1,11 +1,12 @@
 #!/bin/bash
 #SBATCH -JWithLSTM
 #SBATCH -N1 --ntasks-per-node=1
-#SBATCH -G1 
-#SBATCH --mem-per-cpu=2G
+#SBATCH --gres=gpu:1 
+#SBATCH --constraint="L40S|HX00|A40|A100-40GB|A100-80GB|gpu-rtxpro-blackwell|V100-16GB|V100-32GB|RTX6000"
+#SBATCH --mem-per-cpu=16G
 #SBATCH --cpus-per-task=8
-#SBATCH -t360
-#SBATCH -oModelReportWithLSTM-%j.out
+#SBATCH -t300
+#SBATCH -oModelReportCNNWithLSTM-%j.out
 
 #SBATCH --mail-type=BEGIN,END,FAIL       # Mail preferences
 #SBATCH --mail-user=eyang82@gatech.edu # E-mail address for notifications
