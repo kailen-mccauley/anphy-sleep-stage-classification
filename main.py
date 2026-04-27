@@ -82,6 +82,38 @@ class SleepDataset(Dataset):
         # feature = concat_samples(features, self.window_size)
         return feature, label
     
+class SleepDatasetWithContext(Dataset):
+    def __init__(self, file_path, length, window_size=None):
+        self.file_path = file_path
+        self.length = length
+        self.data = torch.load(self.file_path, weights_only=False, mmap=True)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+
+        # Handle boundaries for when index = 0 or end of data list
+        prev_idx = max(idx - 1, 0)
+        next_idx = min(idx + 1, self.length - 1)
+
+        prev_feat = torch.from_numpy(self.data["X"][prev_idx]).to(torch.float32)
+        curr_feat = torch.from_numpy(self.data["X"][idx]).to(torch.float32)
+        next_feat = torch.from_numpy(self.data["X"][next_idx]).to(torch.float32)
+
+        # transpose because Emily did and I trust her
+        prev_feat = prev_feat.transpose(1, 0)
+        curr_feat = curr_feat.transpose(1, 0)
+        next_feat = next_feat.transpose(1, 0)
+
+        # Concatenate (which dim tho?? i forgor)
+        feature = torch.cat([prev_feat, curr_feat, next_feat], dim=1)
+
+        # Label is the middle one
+        label = torch.tensor(self.data["y"][idx]).to(torch.long)
+
+        return feature, label
+    
 # class GlobalSleepDataset(Dataset):
 #     def __init__(self, metadata, data_dir, window_size=2, shuffle_files=True):
 #         self.data_dir = data_dir
