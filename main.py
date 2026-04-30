@@ -15,7 +15,7 @@ import argparse
 import yaml
 from torchmetrics.classification import MulticlassF1Score
 from sklearn.utils import class_weight
-from models import MyModel, MyLSTMModel
+from models import MyModel, MyLSTMModel, CNNContext, CNNContextOnlyBody, LSTMContext, LSTMContextOnlyBody
 import pyarrow as pa
 import pyarrow.parquet as pq
 import sys
@@ -40,26 +40,9 @@ parser = argparse.ArgumentParser(description="CS 7643 Sleep Stage Classification
 parser.add_argument("--config", default="./configs/config_mymodel.yaml")
 
 
-def concat_samples(features, context_size=2):
-    # print(f"Features shape: {features.shape}")
-    N, D = features.shape
-    padded = torch.nn.functional.pad(features, (0, 0, context_size, context_size), mode='constant', value=0)
-
-    windows = []
-    for i in range(N):
-        # Slice the padded tensor to get the segment + context
-        window = padded[i : i + (2 * context_size + 1), :]
-        windows.append(window)
-
-    stacked = torch.stack(windows, dim=0) # (Segments, Window_Size, Features)
-    new_features = stacked.view(N, -1)
-    # print(f"Final feature shape: {new_features.shape}")
-    
-    return new_features
-
 
 class SleepDataset(Dataset):
-    def __init__(self, file_path, length, window_size):
+    def __init__(self, file_path, length, window_size=None):
         
         self.file_path = file_path
         self.length = length
@@ -83,10 +66,11 @@ class SleepDataset(Dataset):
         return feature, label
     
 class SleepDatasetWithContext(Dataset):
-    def __init__(self, file_path, length, window_size=None):
+    def __init__(self, file_path, length, window_size=2):
         self.file_path = file_path
         self.length = length
         self.data = torch.load(self.file_path, weights_only=False, mmap=True)
+        self.window_size = window_size
 
     def __len__(self):
         return self.length
@@ -95,11 +79,13 @@ class SleepDatasetWithContext(Dataset):
 
         # Handle boundaries for when index = 0 or end of data list
         prev_idx = max(idx - 1, 0)
+        prev_window_start = max(prev_idx - self.window_size + 1, 0)
         next_idx = min(idx + 1, self.length - 1)
+        next_window_end = min(next_idx + self.window_size - 1, self.length - 1)
 
-        prev_feat = torch.from_numpy(self.data["X"][prev_idx]).to(torch.float32)
+        prev_feat = torch.from_numpy(self.data["X"][prev_window_start:prev_idx]).to(torch.float32)
         curr_feat = torch.from_numpy(self.data["X"][idx]).to(torch.float32)
-        next_feat = torch.from_numpy(self.data["X"][next_idx]).to(torch.float32)
+        next_feat = torch.from_numpy(self.data["X"][next_idx:next_window_end]).to(torch.float32)
 
         # transpose because Emily did and I trust her
         prev_feat = prev_feat.transpose(1, 0)
@@ -114,51 +100,6 @@ class SleepDatasetWithContext(Dataset):
 
         return feature, label
     
-# class GlobalSleepDataset(Dataset):
-#     def __init__(self, metadata, data_dir, window_size=2, shuffle_files=True):
-#         self.data_dir = data_dir
-#         self.window_size = window_size
-
-#         self.files = []
-#         for i in range(len(metadata)):
-#             file_name = metadata.loc[i, 0]
-#             length = metadata.loc[i, 1]
-#             file_path = os.path.join(data_dir, file_name)
-
-#             self.files.append((file_path, length))
-        
-#         if shuffle_files:
-#             random.shuffle(self.files)
-        
-#         self.index = []
-
-#         for file_path, length in self.files:
-#             for j in range(length):
-#                 self.index.append((file_path, j))
-
-#         # Cache
-#         self._cache_file = None
-#         self._cache_data = None
-
-#     def __len__(self):
-#         return len(self.index)
-
-#     def __getitem__(self, idx):
-#         file_path, local_idx = self.index[idx]
-
-#         # Only reload if file changes
-#         if self._cache_file != file_path:
-#             self._cache_data = torch.load(file_path, weights_only=False, mmap=True)
-#             self._cache_file = file_path
-
-#         data = self._cache_data
-
-#         feature = torch.from_numpy(data["X"][local_idx]).float()
-#         label = torch.tensor(data["y"][local_idx]).long()
-
-#         feature = feature.transpose(1, 0)
-
-#         return feature, label
     
 
 def custom_collate(batch):
@@ -471,12 +412,19 @@ def main():
     metadata.sort_values(by=0, inplace=True)
     metadata = metadata.reset_index(drop=True)
 
-    datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1], 2) for i in range(len(metadata))]
+    if args.context:
+        datasets = [SleepDatasetWithContext(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1], 1) for i in range(len(metadata))]
+    else:
+        datasets = [SleepDataset(data_dir + "/" + metadata.loc[i, 0], metadata.loc[i, 1], 2) for i in range(len(metadata))]
     combined_dataset = ConcatDataset(datasets)
     # combined_dataset = GlobalSleepDataset(metadata, data_dir)
     print("Dataset created")
     
-    model_name = f"{args.model}_{args.optimizer}_optim"
+    model_name = f"{args.model}_"
+
+    if args.context:
+        model_name += "WITH_CONTEXT_"
+    model_name += f"{args.optimizer}_optim"
     if args.scheduler:
         model_name += "_with_scheduler"
     else:
@@ -487,12 +435,22 @@ def main():
         model_name += "_earlystop"
     model_name += f"_seed_{args.seed}"
 
-    if args.model == "CNN":
-        model = MyModel()
-    elif args.model == "CNN-LSTM":
-        model = MyLSTMModel()
-    else:
-        raise ValueError("No model specified")
+ 
+    match args.context:
+        case False if args.model == "CNN":
+            model = MyModel()
+        case False if args.model == "CNN-LSTM":
+            model = MyLSTMModel()
+        case True if args.model == "CNN" and args.body_only:
+            model = CNNContextOnlyBody()
+        case True if args.model == "CNN-LSTM" and args.body_only:
+            model = LSTMContextOnlyBody()
+        case True if args.model == "CNN":
+            model = CNNContext()
+        case True if args.model == "CNN-LSTM":
+            model = LSTMContext()
+        case _:
+            raise ValueError("No valid model specified")
     model = model.to(device)
     
     n = len(combined_dataset)

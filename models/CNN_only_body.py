@@ -1,13 +1,13 @@
 import torch
 import torch.nn as nn
 
-class MyLSTMModel(nn.Module):
+class CNNOnlyBody(nn.Module):
     # You can use pre-existing models but change layers to recieve full credit.
     def __init__(self):
-        super(MyLSTMModel, self).__init__()
+        super(CNNOnlyBody, self).__init__()
         ### TODO: BEGIN SOLUTION ###
         self.model_sequential = nn.Sequential(
-            nn.Conv1d(in_channels=14, out_channels= 32, kernel_size=3),
+            nn.Conv1d(in_channels=10, out_channels= 32, kernel_size=3),
             nn.BatchNorm1d(num_features=32),
             nn.ReLU(),
             nn.MaxPool1d(2, 2),
@@ -33,30 +33,23 @@ class MyLSTMModel(nn.Module):
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2, stride=2),
             nn.Dropout(0.2),
-        )
-        
 
-        self.lstm = nn.LSTM(32, 64, num_layers=1, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(64 * 2, 6)
+            nn.Flatten(),
+            
+            nn.Linear(5824, 1028),
+            nn.ReLU(),
+            nn.Linear(1028, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 6),
+        )
+        ### END SOLUTION ###
 
     def forward(self, x):
         outs = None
         ### TODO: BEGIN SOLUTION ###
-        # print(f"dimensions of x: {x.shape}")
-
         outs = self.model_sequential(x)
-        # print(f"dimensions of outs after cnn: {outs.shape}")
-        outs = outs.permute(0, 2, 1)
-        self.lstm.flatten_parameters()
-        outs, (hn, cn) = self.lstm(outs)
-        # print(f"dimensions of outs after lstm: {outs.shape}")
-        # print(f"dimensions of hn: {hn.shape}")
-        # print(f"dimensions of cn: {cn.shape}")
-        final_hn_forward_state = hn[0]
-        final_hn_backward_state = hn[1]
-        hidden_cat = torch.cat((final_hn_forward_state, final_hn_backward_state), dim=1)
-
-        outs = self.fc(hidden_cat)
         ### END SOLUTION ###
         return outs
     

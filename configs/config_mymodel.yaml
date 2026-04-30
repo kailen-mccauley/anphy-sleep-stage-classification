@@ -15,8 +15,10 @@ data:
   save_preds: True
 
 network:
-  model: CNN # CNN or CNN-LSTM
-  optimizer: ADAM # base or ADAM
-  scheduler: True
+  model: CNN-LSTM # CNN or CNN-LSTM
+  optimizer: base # base or ADAM
+  scheduler: False
   class_weighting: False
   early_stopping: False
+  context: False
+  body_only: False
