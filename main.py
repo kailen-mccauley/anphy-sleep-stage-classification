@@ -243,7 +243,7 @@ def train(epoch, data_loader, model, optimizer, scheduler, criterion, metric_col
     # print("Train loop ended!")
     metric_collector["accuracy"].append(acc.avg)
     metric_collector["loss"].append(losses.avg)
-    metric_collector["f1"].append(final_macro_f1)
+    metric_collector["f1"].append(final_macro_f1.item())
 
 
 def validate(epoch, val_loader, model, criterion, metric_collector):
@@ -336,7 +336,7 @@ def validate(epoch, val_loader, model, criterion, metric_collector):
 
     metric_collector["accuracy"].append(acc.avg)
     metric_collector["loss"].append(losses.avg)
-    metric_collector["f1"].append(final_macro_f1)
+    metric_collector["f1"].append(final_macro_f1.item())
     
 
     return acc.avg, cm
@@ -684,7 +684,7 @@ def main():
 
     test_metrics_collector["accuracy"].append(acc.avg)
     test_metrics_collector["loss"].append(losses.avg)
-    test_metrics_collector["f1"].append(final_macro_f1)
+    test_metrics_collector["f1"].append(final_macro_f1.item())
 
     if args.save_loss:
         print("Saving losses")
