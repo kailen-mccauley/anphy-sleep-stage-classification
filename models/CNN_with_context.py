@@ -7,7 +7,7 @@ class CNNContext(nn.Module):
         super(CNNContext, self).__init__()
         ### TODO: BEGIN SOLUTION ###
         self.model_sequential = nn.Sequential(
-            nn.Conv1d(in_channels=14, out_channels= 32, kernel_size=3),
+            nn.Conv1d(in_channels=42, out_channels= 32, kernel_size=3),
             nn.BatchNorm1d(num_features=32),
             nn.ReLU(),
             nn.MaxPool1d(2, 2),

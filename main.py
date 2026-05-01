@@ -37,7 +37,7 @@ print(f"Device: {device}")
 assert device == "cuda"
 
 parser = argparse.ArgumentParser(description="CS 7643 Sleep Stage Classification Project")
-parser.add_argument("--config", default="./configs/config_mymodel.yaml")
+parser.add_argument("--config", default="./configs/LSTM_base.yaml")
 
 
 
@@ -79,13 +79,11 @@ class SleepDatasetWithContext(Dataset):
 
         # Handle boundaries for when index = 0 or end of data list
         prev_idx = max(idx - 1, 0)
-        prev_window_start = max(prev_idx - self.window_size + 1, 0)
         next_idx = min(idx + 1, self.length - 1)
-        next_window_end = min(next_idx + self.window_size - 1, self.length - 1)
 
-        prev_feat = torch.from_numpy(self.data["X"][prev_window_start:prev_idx]).to(torch.float32)
+        prev_feat = torch.from_numpy(self.data["X"][prev_idx]).to(torch.float32)
         curr_feat = torch.from_numpy(self.data["X"][idx]).to(torch.float32)
-        next_feat = torch.from_numpy(self.data["X"][next_idx:next_window_end]).to(torch.float32)
+        next_feat = torch.from_numpy(self.data["X"][next_idx]).to(torch.float32)
 
         # transpose because Emily did and I trust her
         prev_feat = prev_feat.transpose(1, 0)
