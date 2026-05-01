@@ -15,7 +15,7 @@ import argparse
 import yaml
 from torchmetrics.classification import MulticlassF1Score
 from sklearn.utils import class_weight
-from models import MyModel, MyLSTMModel, CNNContext, CNNContextOnlyBody, LSTMContext, LSTMContextOnlyBody
+from models import MyModel, MyLSTMModel, CNNContext, CNNContextOnlyBody, LSTMContext, LSTMContextOnlyBody, LSTMOnlyBody, CNNOnlyBody
 import pyarrow as pa
 import pyarrow.parquet as pq
 import sys
@@ -441,6 +441,10 @@ def main():
 
  
     match args.context:
+        case False if args.model == "CNN" and args.body_only:
+            model = CNNOnlyBody()
+        case False if args.model == "CNN-LSTM" and args.body_only:
+            model = LSTMOnlyBody()
         case False if args.model == "CNN":
             model = MyModel()
         case False if args.model == "CNN-LSTM":
