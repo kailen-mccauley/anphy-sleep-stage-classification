@@ -404,9 +404,15 @@ def main():
     generator = torch.Generator().manual_seed(int(args.seed))
 
 
-    data_dir = 'anphy_sleep_data/patient_records/clean'       
     
-    metadata = pd.read_csv("recording_epoch_nums.csv", header=None)
+    if args.body_only:
+        data_dir = 'anphy_sleep_data/patient_records/only_body'
+        metadata = pd.read_csv("recording_epoch_nums_body_only.csv", header=None)
+    else:
+        data_dir = 'anphy_sleep_data/patient_records/clean'
+        metadata = pd.read_csv("recording_epoch_nums.csv", header=None)       
+    
+    
     metadata.sort_values(by=0, inplace=True)
     metadata = metadata.reset_index(drop=True)
 
