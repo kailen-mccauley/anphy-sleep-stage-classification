@@ -13,6 +13,7 @@ Train:
 data:
   save_best: True
   save_preds: True
+  save_loss: True
 
 network:
   model: CNN-LSTM # CNN or CNN-LSTM

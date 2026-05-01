@@ -150,7 +150,7 @@ def accuracy(output, target):
     return acc
 
 
-def train(epoch, data_loader, model, optimizer, scheduler, criterion):
+def train(epoch, data_loader, model, optimizer, scheduler, criterion, metric_collector):
     iter_time = AverageMeter()
     losses = AverageMeter()
     acc = AverageMeter()
@@ -237,12 +237,16 @@ def train(epoch, data_loader, model, optimizer, scheduler, criterion):
     for i, acc_i in enumerate(per_cls_acc):
         print("Training Accuracy of Class {}: {:.4f}".format(i, acc_i))
     print(f"Total Overall Training Accuracy: {overall_accuracy}")
+    print(f"Average Training Accuracy across Batches: {acc.avg}")
     print("* Prec @1: {top1.avg:.4f}".format(top1=acc))
     print(f"Macro F1 Score on Training Set: {final_macro_f1.item()}")
     # print("Train loop ended!")
+    metric_collector["accuracy"].append(acc.avg)
+    metric_collector["loss"].append(losses.avg)
+    metric_collector["f1"].append(final_macro_f1)
 
 
-def validate(epoch, val_loader, model, criterion):
+def validate(epoch, val_loader, model, criterion, metric_collector):
     """
     Hint: make sure to use torch.no_grad() to disable gradient computation. This will help reduce memory usage and speed up computation.
     """
@@ -326,8 +330,13 @@ def validate(epoch, val_loader, model, criterion):
     for i, acc_i in enumerate(per_cls_acc):
         print("Validation Accuracy of Class {}: {:.4f}".format(i, acc_i))
     print(f"Total Overall Validation Accuracy: {overall_accuracy}")
+    print(f"Average Val Accuracy across Batches: {acc.avg}")
     print("* Prec @1: {top1.avg:.4f}".format(top1=acc))
     print(f"Macro F1 Score on Validation Set: {final_macro_f1.item()}")
+
+    metric_collector["accuracy"].append(acc.avg)
+    metric_collector["loss"].append(losses.avg)
+    metric_collector["f1"].append(final_macro_f1)
     
 
     return acc.avg, cm
@@ -534,16 +543,19 @@ def main():
     best_cm = None
     best_model = model
     peak_val_accuracy_epoch = 0
+
+    train_metrics_collector = {"accuracy": [], "loss": [], "f1": []}
+    val_metrics_collector = {"accuracy": [], "loss": [], "f1": []}
     for epoch in range(args.epochs):
         print(f"Epoch {epoch}")
         if args.optimizer == "base":
             adjust_learning_rate(optimizer, epoch, args)
 
         # train loop
-        train(epoch, train_loader, model, optimizer, scheduler, criterion)
+        train(epoch, train_loader, model, optimizer, scheduler, criterion, train_metrics_collector)
 
         # validation loop
-        acc, cm = validate(epoch, val_loader, model, criterion)
+        acc, cm = validate(epoch, val_loader, model, criterion, val_metrics_collector)
 
         if early_stopper is not None:
             early_stopper(acc)
@@ -573,7 +585,7 @@ def main():
                 best_model.state_dict(), "./checkpoints/" + model_name + "_best_model" + ".pth"
             )
         
-    print("Preparing for testing...")
+    # print("Preparing for testing...")
 
     best_model.eval()
     iter_time = AverageMeter()
@@ -599,7 +611,9 @@ def main():
     all_preds = []
     all_targets = []
 
-    print("Testing initiated!")
+    # print("Testing initiated!")
+
+    test_metrics_collector = {"accuracy": [], "loss": [], "f1": []}
 
     with torch.no_grad():
         for idx, (data, target) in enumerate(test_loader):
@@ -663,7 +677,22 @@ def main():
         print("Test Accuracy of Class {}: {:.4f}".format(i, acc_i))
     print(f"Macro F1 Score on Test Set: {final_macro_f1.item()}")
     print(f"Total Overall Test Accuracy: {overall_accuracy}")
+    print(f"Average Test Accuracy Across Batches: {acc.avg}")
     print(f"Final Confusion Matrix: {cm}")
+
+    test_metrics_collector["accuracy"].append(acc.avg)
+    test_metrics_collector["loss"].append(losses.avg)
+    test_metrics_collector["f1"].append(final_macro_f1)
+
+    if args.save_loss:
+        print("Saving losses")
+        train_loss_df = pd.DataFrame(train_metrics_collector)
+        val_loss_df = pd.DataFrame(val_metrics_collector)
+        test_loss_df = pd.DataFrame(test_metrics_collector)
+
+        train_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_train_loss.csv")
+        val_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_val_loss.csv")
+        test_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_test_loss.csv")
 
     if args.save_preds:
         print("Saving results")
