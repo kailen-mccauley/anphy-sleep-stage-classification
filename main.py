@@ -442,6 +442,8 @@ def main():
         model_name += "_with_scheduler"
     else:
         model_name +="_noscheduler"
+    if args.body_only:
+        model_name += "_body_only"
     if args.class_weighting:
         model_name += "_with_class_weights"
     if args.early_stopping:
@@ -696,15 +698,7 @@ def main():
 
     if args.save_preds:
         print("Saving results")
-        # final_df = pd.DataFrame({
-        #         "Predicted": torch.cat(all_preds).numpy(),
-        #         "Actual": torch.cat(all_targets).numpy()
-        #     })
-        # print("DataFrame completed")
-
-        # print(final_df.head())
-
-        # final_df.to_parquet(f"{output_dir}/results.parquet", engine="pyarrow", compression="snappy", index=False)
+        
 
         writer = None
         for i in range(len(test_loader)):

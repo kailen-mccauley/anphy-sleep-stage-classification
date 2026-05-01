@@ -6,7 +6,7 @@ Train:
   steps: [6, 8]
   warmup: 0
   momentum: 0.9
-  seed: 59
+  seed: 42
   patience: 50
   min_delta: 0.00001
 
@@ -17,9 +17,9 @@ data:
 
 network:
   model: CNN-LSTM # CNN or CNN-LSTM
-  optimizer: base # base or ADAM
-  scheduler: False
+  optimizer: ADAM # base or ADAM
+  scheduler: True
   class_weighting: False
   early_stopping: False
   context: False
-  body_only: False
+  body_only: True
