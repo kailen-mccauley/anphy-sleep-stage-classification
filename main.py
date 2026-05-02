@@ -692,9 +692,9 @@ def main():
         val_loss_df = pd.DataFrame(val_metrics_collector)
         test_loss_df = pd.DataFrame(test_metrics_collector)
 
-        train_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_train_loss.csv")
-        val_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_val_loss.csv")
-        test_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_test_loss.csv")
+        train_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_train_loss.csv", index_label="epoch")
+        val_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_val_loss.csv", index_label="epoch")
+        test_loss_df.to_csv(f"{output_dir}/seed_{args.seed}_test_loss.csv", index_label="epoch")
 
     if args.save_preds:
         print("Saving results")

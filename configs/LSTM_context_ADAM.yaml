@@ -6,7 +6,7 @@ Train:
   steps: [6, 8]
   warmup: 0
   momentum: 0.9
-  seed: 42
+  seed: 59
   patience: 50
   min_delta: 0.00001
 

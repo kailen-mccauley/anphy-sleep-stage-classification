@@ -1,5 +1,4 @@
 # anphy-sleep-stage-classification
-# TODO: 
 
-Replace the confusion matrix code with sklearn's   
-Test hypotheses across diff seeds for splits  
+This is the repository for our CS 7643 project on
+classifying sleep stages using the ANPHY-Sleep dataset.
